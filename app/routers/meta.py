@@ -62,9 +62,19 @@ THREEFS_COMPONENTS = {
 }
 
 FUNDING_SOURCES = {
-    "Domestic": ["FGN (Federal Government of Nigeria)", "State/LGA Government"],
-    "International": ["IFAD ODA", "IFAD OOF"],
-    "Private": ["Beneficiary Contribution", "Capital Market", "Commercial Banks"],
+    "Domestic Public Financing": [
+        "FGN counterpart funding", 
+        "State/LGA contribution"
+    ],
+    "International Development Financing": [
+        "IFAD loan - Official Development Assistance (ODA)", 
+        "Other Official Flows (OOF)"
+    ],
+    "Private Sector Financing": [
+        "Beneficiary contribution", 
+        "Capital market operators", 
+        "Banking systems"
+    ],
 }
 
 VALUE_CHAIN_SEGMENTS = [

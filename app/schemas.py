@@ -69,12 +69,14 @@ class TransactionCreate(BaseModel):
     threeFS_sub_components: list[str] = []
     cofog_code: Optional[str] = None
     funding_sources: list[str] = []
+    sub_funding_sources: list[str] = []
     expenditure_fgn: float = 0.0
     expenditure_state: float = 0.0
     expenditure_ifad: float = 0.0
     expenditure_oof: float = 0.0
     expenditure_beneficiary: float = 0.0
     expenditure_other: float = 0.0
+    expenditure_total_reported: float = 0.0
     beneficiary_categories: list[str] = []
     beneficiary_total: Optional[int] = None
     beneficiary_male: Optional[int] = None
@@ -82,7 +84,7 @@ class TransactionCreate(BaseModel):
     beneficiary_youth_under35: Optional[int] = None
     value_chain_segments: list[str] = []
     climate_flag: Optional[str] = None
-    data_source: Optional[str] = None
+    data_source: list[str] = []
     supporting_documents: list[str] = []
     classification_notes: Optional[str] = None
 
@@ -117,8 +119,8 @@ class TransactionRead(BaseModel):
     lgas: list[str]
     threeFS_primary: list[str]
     threeFS_sub_components: list[str]
-    cofog_code: Optional[str]
     funding_sources: list[str]
+    sub_funding_sources: list[str]
     expenditure_fgn: float
     expenditure_state: float
     expenditure_ifad: float
@@ -126,6 +128,7 @@ class TransactionRead(BaseModel):
     expenditure_beneficiary: float
     expenditure_other: float
     expenditure_total: float
+    expenditure_total_reported: float
     beneficiary_categories: list[str]
     beneficiary_total: Optional[int]
     beneficiary_male: Optional[int]
@@ -133,7 +136,7 @@ class TransactionRead(BaseModel):
     beneficiary_youth_under35: Optional[int]
     value_chain_segments: list[str]
     climate_flag: Optional[str]
-    data_source: Optional[str]
+    data_source: list[str]
     supporting_documents: list[str]
     entered_by: Optional[str]
     entered_at: datetime
@@ -157,12 +160,14 @@ class TransactionUpdate(BaseModel):
     threeFS_sub_components: Optional[list[str]] = None
     cofog_code: Optional[str] = None
     funding_sources: Optional[list[str]] = None
+    sub_funding_sources: Optional[list[str]] = None
     expenditure_fgn: Optional[float] = None
     expenditure_state: Optional[float] = None
     expenditure_ifad: Optional[float] = None
     expenditure_oof: Optional[float] = None
     expenditure_beneficiary: Optional[float] = None
     expenditure_other: Optional[float] = None
+    expenditure_total_reported: Optional[float] = None
     beneficiary_categories: Optional[list[str]] = None
     beneficiary_total: Optional[int] = None
     beneficiary_male: Optional[int] = None
@@ -170,7 +175,7 @@ class TransactionUpdate(BaseModel):
     beneficiary_youth_under35: Optional[int] = None
     value_chain_segments: Optional[list[str]] = None
     climate_flag: Optional[str] = None
-    data_source: Optional[str] = None
+    data_source: Optional[list[str]] = None
     supporting_documents: Optional[list[str]] = None
     classification_notes: Optional[str] = None
 
@@ -204,3 +209,24 @@ class PaginatedTransactions(BaseModel):
     page: int
     size: int
     pages: int
+
+
+# ─────────────────────────────────────────────
+# Document Repository Schemas
+# ─────────────────────────────────────────────
+
+class DocumentBase(BaseModel):
+    name: str
+    state: str
+    data_source: str
+
+class DocumentCreate(DocumentBase):
+    pass
+
+class DocumentRead(DocumentBase):
+    id: str
+    filename: str
+    file_path: str
+    uploaded_by: str | None
+    uploaded_at: datetime
+    model_config = {"from_attributes": True}

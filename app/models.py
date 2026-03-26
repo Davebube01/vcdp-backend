@@ -130,6 +130,7 @@ class Transaction(Base):
 
     # Fields 15–16: Funding Source / Sub-Source
     funding_sources: Mapped[list] = mapped_column(JSON, default=list)
+    sub_funding_sources: Mapped[list] = mapped_column(JSON, default=list)
 
     # Field 17: Expenditure breakdown (stored as JSON object keyed by source)
     expenditure_fgn: Mapped[float] = mapped_column(Float, default=0.0)
@@ -139,6 +140,7 @@ class Transaction(Base):
     expenditure_beneficiary: Mapped[float] = mapped_column(Float, default=0.0)
     expenditure_other: Mapped[float] = mapped_column(Float, default=0.0)
     expenditure_total: Mapped[float] = mapped_column(Float, default=0.0)
+    expenditure_total_reported: Mapped[float] = mapped_column(Float, default=0.0)
 
     # Field 18: Beneficiary data
     beneficiary_categories: Mapped[list] = mapped_column(JSON, default=list)
@@ -154,7 +156,7 @@ class Transaction(Base):
     climate_flag: Mapped[str | None] = mapped_column(String(5))
 
     # Fields 21–22: Data Source / Supporting Documents
-    data_source: Mapped[str | None] = mapped_column(String(200))
+    data_source: Mapped[list | None] = mapped_column(JSON, default=list)
     supporting_documents: Mapped[list] = mapped_column(JSON, default=list)
 
     # Fields 23–24: Entered By / Date + Notes
@@ -163,3 +165,22 @@ class Transaction(Base):
     classification_notes: Mapped[str | None] = mapped_column(Text)
 
     entered_by_user: Mapped["User | None"] = relationship("User", back_populates="records")
+
+
+# ─────────────────────────────────────────────
+# Reference Documents Repository
+# ─────────────────────────────────────────────
+
+class Document(Base):
+    __tablename__ = "documents"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    filename: Mapped[str] = mapped_column(String(300), nullable=False)
+    file_path: Mapped[str] = mapped_column(String(500), nullable=False)
+    state: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    data_source: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    uploaded_by: Mapped[str | None] = mapped_column(ForeignKey("users.id"))
+    uploaded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    uploader: Mapped["User | None"] = relationship("User")

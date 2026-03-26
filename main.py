@@ -3,7 +3,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
 from app.database import init_db
-from app.routers import auth, users, records, meta
+from app.routers import auth, users, records, meta, documents
 
 
 @asynccontextmanager
@@ -37,6 +37,7 @@ app.include_router(auth.router)
 app.include_router(users.router)
 app.include_router(records.router)
 app.include_router(meta.router)
+app.include_router(documents.router)
 
 
 @app.get("/api/health", tags=["health"])
