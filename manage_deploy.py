@@ -31,7 +31,12 @@ async def run_migrations():
         except Exception:
             logger.info("expenditure_total_reported column already exists or could not be added.")
 
-    # 4. Repair JSON data
+    # 4. Harmonize 3FS names (v2)
+    logger.info("Harmonizing 3FS names to v2 structure...")
+    from migrate_3fs_v2 import migrate_to_3fs_v2
+    await migrate_to_3fs_v2()
+
+    # 5. Repair JSON data
     logger.info("Checking for JSON data repairs...")
     async with AsyncSessionLocal() as session:
         from sqlalchemy import select

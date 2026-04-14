@@ -17,47 +17,62 @@ VCDP_COMPONENTS = {
     "Component 1: Agricultural Market Development": [
         "Value Addition & Market Linkages",
         "Market Infrastructure",
+        "Mainstreaming activities such as gender/youth, financial inclusion, E&CC and nutrition are cross-cutting",
     ],
     "Component 2: Smallholder Productivity Enhancement": [
         "Strengthening Farmers' Organisations",
         "Smallholder Production",
+        "Mainstreaming activities such as gender/youth, financial inclusion, E&CC and nutrition are cross-cutting"
     ],
     "Component 3: Programme Management and Coordination": [
-        "Gender",
-        "Youth",
-        "Environment",
-        "Knowledge Management",
+        "Procurement",
+        "Knowledge Management & Sharing",
+        "M&E",
+        "Finance/Audit",
+        "Admin",
     ],
 }
 
 THREEFS_COMPONENTS = {
-    "1. Food Production": [
-        "1.1 Crop production",
-        "1.2 Livestock production",
-        "1.3 Fisheries & aquaculture",
-        "1.4 Forestry",
+    "Component 1: Agricultural Development and Value Chains": [
+        "Production support (On-farm)",
+        "Input supply & technologies",
+        "Extension services",
+        "Agro-processing",
+        "Market linkages",
     ],
-    "2. Food Supply Chains": [
-        "2.1 Post-harvest handling & storage",
-        "2.2 Processing & packaging",
-        "2.3 Distribution & marketing",
-        "2.4 Trade facilitation",
+    "Component 2: Infrastructure for Food Systems": [
+        "Rural roads or other transportation networks",
+        "Market facilities/infrastructure",
+        "Storage facilities/infrastructure",
+        "Irrigation systems",
+        "Processing centers",
+        "Rural electrification support",
     ],
-    "3. Food Environments": [
-        "3.1 Access to markets",
-        "3.2 Food safety & quality standards",
-        "3.3 Consumer information",
+    "Component 3: Nutrition and Health": [
+        "Nutrition-sensitive agriculture",
+        "Food fortification",
+        "Nutrition education",
+        "Dietary diversity",
+        "Food safety",
+        "health services",
     ],
-    "4. Food Utilisation": [
-        "4.1 Nutrition education",
-        "4.2 Water, sanitation & hygiene",
-        "4.3 Health services",
+    "Component 4: Social Assistance": [
+        "Cash transfer schemes",
+        "Emergency food assistance",
+        "Voucher programs",
+        "Social safety nets",
+        "School feeding programs",
+        "Subsidies",
     ],
-    "5. Enabling Environment": [
-        "5.1 Policy & governance",
-        "5.2 Research & development",
-        "5.3 Capacity development",
-        "5.4 Climate & environment",
+    "Component 5: Climate Change and Natural Resources": [
+        "Climate adaptation",
+        "Climate-smart agriculture",
+        "Land management",
+        "Biodiversity",
+        "Risk management",
+        "Climate mitigation",
+        "Natural resource management",
     ],
 }
 
@@ -89,7 +104,7 @@ VALUE_CHAIN_SEGMENTS = [
 
 COMMODITIES = ["Rice", "Cassava", "Cross-cutting"]
 
-FISCAL_YEARS = list(range(2013, 2026))
+FISCAL_YEARS = list(range(2013, 2051))
 
 
 @router.get("/vcdp-components")

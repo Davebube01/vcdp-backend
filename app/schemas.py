@@ -1,7 +1,8 @@
 from datetime import datetime
 from typing import Optional
 from pydantic import BaseModel, EmailStr, field_validator
-from app.models import UserRole
+from pydantic import BaseModel, EmailStr, field_validator
+from app.models import UserRole, TransactionStatus
 
 
 # ─────────────────────────────────────────────
@@ -61,7 +62,7 @@ class TransactionCreate(BaseModel):
     fy_completed: Optional[int] = None
     programme_phase: Optional[str] = None
     fiscal_quarter: Optional[str] = None
-    vcdp_component: Optional[str] = None
+    vcdp_component: list[str] = []
     vcdp_sub_components: list[str] = []
     state: str
     lgas: list[str] = []
@@ -82,11 +83,17 @@ class TransactionCreate(BaseModel):
     beneficiary_male: Optional[int] = None
     beneficiary_female: Optional[int] = None
     beneficiary_youth_under35: Optional[int] = None
+    beneficiary_male_percentage: Optional[float] = None
+    beneficiary_female_percentage: Optional[float] = None
+    beneficiary_youth_percentage: Optional[float] = None
+    beneficiary_plwd: Optional[int] = None
     value_chain_segments: list[str] = []
     climate_flag: Optional[str] = None
     data_source: list[str] = []
     supporting_documents: list[str] = []
     classification_notes: Optional[str] = None
+    status: Optional[TransactionStatus] = TransactionStatus.PUBLISHED
+    rejection_reason: Optional[str] = None
 
     @field_validator("expenditure_fgn", "expenditure_state", "expenditure_ifad",
                      "expenditure_oof", "expenditure_beneficiary", "expenditure_other")
@@ -113,7 +120,7 @@ class TransactionRead(BaseModel):
     fy_completed: Optional[int]
     programme_phase: Optional[str]
     fiscal_quarter: Optional[str]
-    vcdp_component: Optional[str]
+    vcdp_component: list[str] = []
     vcdp_sub_components: list[str]
     state: str
     lgas: list[str]
@@ -134,6 +141,7 @@ class TransactionRead(BaseModel):
     beneficiary_male: Optional[int]
     beneficiary_female: Optional[int]
     beneficiary_youth_under35: Optional[int]
+    beneficiary_plwd: Optional[int]
     value_chain_segments: list[str]
     climate_flag: Optional[str]
     data_source: list[str]
@@ -141,6 +149,8 @@ class TransactionRead(BaseModel):
     entered_by: Optional[str]
     entered_at: datetime
     classification_notes: Optional[str]
+    status: TransactionStatus
+    rejection_reason: Optional[str]
 
     model_config = {"from_attributes": True}
 
@@ -152,7 +162,7 @@ class TransactionUpdate(BaseModel):
     fy_completed: Optional[int] = None
     programme_phase: Optional[str] = None
     fiscal_quarter: Optional[str] = None
-    vcdp_component: Optional[str] = None
+    vcdp_component: Optional[list[str]] = None
     vcdp_sub_components: Optional[list[str]] = None
     state: Optional[str] = None
     lgas: Optional[list[str]] = None
@@ -172,7 +182,10 @@ class TransactionUpdate(BaseModel):
     beneficiary_total: Optional[int] = None
     beneficiary_male: Optional[int] = None
     beneficiary_female: Optional[int] = None
+    status: Optional[TransactionStatus] = None
+    rejection_reason: Optional[str] = None
     beneficiary_youth_under35: Optional[int] = None
+    beneficiary_plwd: Optional[int] = None
     value_chain_segments: Optional[list[str]] = None
     climate_flag: Optional[str] = None
     data_source: Optional[list[str]] = None
@@ -229,4 +242,26 @@ class DocumentRead(DocumentBase):
     file_path: str
     uploaded_by: str | None
     uploaded_at: datetime
+    model_config = {"from_attributes": True}
+
+
+# ─────────────────────────────────────────────
+# Project Schemas
+# ─────────────────────────────────────────────
+
+class ProjectBase(BaseModel):
+    ref_id: str
+    name: str
+
+class ProjectCreate(ProjectBase):
+    pass
+
+class ProjectUpdate(BaseModel):
+    ref_id: str | None = None
+    name: str | None = None
+
+class ProjectRead(ProjectBase):
+    id: str
+    created_by: str | None
+    created_at: datetime
     model_config = {"from_attributes": True}

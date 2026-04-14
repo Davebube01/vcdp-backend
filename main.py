@@ -3,7 +3,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
 from app.database import init_db
-from app.routers import auth, users, records, meta, documents
+from app.routers import auth, users, records, meta, documents, projects
 
 
 @asynccontextmanager
@@ -17,7 +17,7 @@ app = FastAPI(
     title="VCDP FormCraft API",
     description=(
         "Backend API for the VCDP Transaction Tracking & 3FS Reporting System. "
-        "Tracks VCDP expenditures 2013–2025, links to UN/IFAD 3FS framework."
+        "Tracks VCDP expenditures 2013-2050, links to UN/IFAD 3FS framework."
     ),
     version="1.0.0",
     lifespan=lifespan,
@@ -38,6 +38,7 @@ app.include_router(users.router)
 app.include_router(records.router)
 app.include_router(meta.router)
 app.include_router(documents.router)
+app.include_router(projects.router)
 
 
 @app.get("/api/health", tags=["health"])

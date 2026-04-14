@@ -5,7 +5,7 @@ from sqlalchemy import (
     JSON, func
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-from app.database import Base
+from app.database import Base, PG_JSON
 import enum
 
 
@@ -41,6 +41,13 @@ class VCDPComponent(str, enum.Enum):
 class ClimateFlag(str, enum.Enum):
     YES = "Yes"
     NO = "No"
+
+
+class TransactionStatus(str, enum.Enum):
+    PENDING = "PENDING"
+    REJECTED = "REJECTED"
+    DRAFT = "DRAFT"
+    PUBLISHED = "PUBLISHED"
 
 
 # ─────────────────────────────────────────────
@@ -114,23 +121,23 @@ class Transaction(Base):
     fiscal_quarter: Mapped[str | None] = mapped_column(String(10))
 
     # Fields 8–9: VCDP Component / Sub-Component
-    vcdp_component: Mapped[str | None] = mapped_column(String(100))
-    vcdp_sub_components: Mapped[list] = mapped_column(JSON, default=list)
+    vcdp_component: Mapped[list] = mapped_column(PG_JSON, default=list)
+    vcdp_sub_components: Mapped[list] = mapped_column(PG_JSON, default=list)
 
     # Fields 10–11: State / LGA(s)
     state: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
-    lgas: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    lgas: Mapped[list] = mapped_column(PG_JSON, nullable=False, default=list)
 
     # Fields 12–13: 3FS Primary / Sub-Component
-    threeFS_primary: Mapped[list] = mapped_column(JSON, default=list)
-    threeFS_sub_components: Mapped[list] = mapped_column(JSON, default=list)
+    threeFS_primary: Mapped[list] = mapped_column(PG_JSON, default=list)
+    threeFS_sub_components: Mapped[list] = mapped_column(PG_JSON, default=list)
 
     # Field 14: COFOG Code
     cofog_code: Mapped[str | None] = mapped_column(String(50))
 
     # Fields 15–16: Funding Source / Sub-Source
-    funding_sources: Mapped[list] = mapped_column(JSON, default=list)
-    sub_funding_sources: Mapped[list] = mapped_column(JSON, default=list)
+    funding_sources: Mapped[list] = mapped_column(PG_JSON, default=list)
+    sub_funding_sources: Mapped[list] = mapped_column(PG_JSON, default=list)
 
     # Field 17: Expenditure breakdown (stored as JSON object keyed by source)
     expenditure_fgn: Mapped[float] = mapped_column(Float, default=0.0)
@@ -143,26 +150,33 @@ class Transaction(Base):
     expenditure_total_reported: Mapped[float] = mapped_column(Float, default=0.0)
 
     # Field 18: Beneficiary data
-    beneficiary_categories: Mapped[list] = mapped_column(JSON, default=list)
+    beneficiary_categories: Mapped[list] = mapped_column(PG_JSON, default=list)
     beneficiary_total: Mapped[int | None] = mapped_column()
     beneficiary_male: Mapped[int | None] = mapped_column()
     beneficiary_female: Mapped[int | None] = mapped_column()
     beneficiary_youth_under35: Mapped[int | None] = mapped_column()
+    beneficiary_male_percentage: Mapped[float | None] = mapped_column()
+    beneficiary_female_percentage: Mapped[float | None] = mapped_column()
+    beneficiary_youth_percentage: Mapped[float | None] = mapped_column()
+    beneficiary_plwd: Mapped[int | None] = mapped_column()
 
     # Field 19: Value Chain Segment
-    value_chain_segments: Mapped[list] = mapped_column(JSON, default=list)
+    value_chain_segments: Mapped[list] = mapped_column(PG_JSON, default=list)
 
     # Field 20: Climate/Environment Flag
     climate_flag: Mapped[str | None] = mapped_column(String(5))
 
     # Fields 21–22: Data Source / Supporting Documents
-    data_source: Mapped[list | None] = mapped_column(JSON, default=list)
-    supporting_documents: Mapped[list] = mapped_column(JSON, default=list)
+    data_source: Mapped[list | None] = mapped_column(PG_JSON, default=list)
+    supporting_documents: Mapped[list] = mapped_column(PG_JSON, default=list)
 
     # Fields 23–24: Entered By / Date + Notes
     entered_by: Mapped[str | None] = mapped_column(ForeignKey("users.id"))
     entered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     classification_notes: Mapped[str | None] = mapped_column(Text)
+
+    status: Mapped[TransactionStatus] = mapped_column(SAEnum(TransactionStatus), default=TransactionStatus.PUBLISHED)
+    rejection_reason: Mapped[str | None] = mapped_column(Text)
 
     entered_by_user: Mapped["User | None"] = relationship("User", back_populates="records")
 
@@ -184,3 +198,19 @@ class Document(Base):
     uploaded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     uploader: Mapped["User | None"] = relationship("User")
+
+
+# ─────────────────────────────────────────────
+# Projects Repository
+# ─────────────────────────────────────────────
+
+class Project(Base):
+    __tablename__ = "projects"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    ref_id: Mapped[str] = mapped_column(String(100), unique=True, nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(300), nullable=False)
+    created_by: Mapped[str | None] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    creator: Mapped["User | None"] = relationship("User")

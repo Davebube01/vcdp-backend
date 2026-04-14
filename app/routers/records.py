@@ -10,6 +10,7 @@ from datetime import datetime
 from app.database import get_db
 from app.models import Transaction, UserRole
 from app.models import User
+from app.models import TransactionStatus
 from app.schemas import (
     TransactionCreate, TransactionRead, TransactionUpdate, PaginatedTransactions
 )
@@ -50,6 +51,7 @@ async def list_records(
     vcdp_component: str | None = Query(None),
     threeFS_primary: str | None = Query(None),
     climate_flag: str | None = Query(None),
+    status: TransactionStatus | None = Query(None),
     current_user: User = Depends(require_active_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -71,9 +73,11 @@ async def list_records(
     if fy_awarded:
         query = query.where(Transaction.fy_awarded == fy_awarded)
     if vcdp_component:
-        query = query.where(Transaction.vcdp_component == vcdp_component)
+        query = query.where(Transaction.vcdp_component.contains([vcdp_component]))
     if climate_flag:
         query = query.where(Transaction.climate_flag == climate_flag)
+    if status:
+        query = query.where(Transaction.status == status)
 
     # Count total
     count_result = await db.execute(select(func.count()).select_from(query.subquery()))
@@ -117,14 +121,30 @@ async def create_record(
     # Auto-derive phase
     phase = data.programme_phase or _derive_phase(data.fy_awarded)
 
+    if current_user.role != UserRole.NATIONAL_ADMIN:
+        data.status = TransactionStatus.PENDING
+    elif not data.status:
+        data.status = TransactionStatus.DRAFT
+
     record = Transaction(
         **data.model_dump(exclude={"programme_phase"}),
         programme_phase=phase,
         expenditure_total=total,
         entered_by=current_user.id,
     )
-    db.add(record)
-    await db.commit()
+    if current_user.role != UserRole.NATIONAL_ADMIN:
+        record.status = TransactionStatus.PENDING
+
+    try:
+        db.add(record)
+        await db.commit()
+    except Exception as e:
+        await db.rollback()
+        # Check specifically for unique constraint on ref_id
+        if "UNIQUE constraint failed: transactions.ref_id" in str(e):
+            raise HTTPException(status_code=400, detail="A record with this Reference ID already exists.")
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+
     await db.refresh(record)
     return TransactionRead.model_validate(record)
 
@@ -158,8 +178,14 @@ async def update_record(
     if current_user.role != UserRole.NATIONAL_ADMIN and record.state != current_user.state:
         raise HTTPException(status_code=403, detail="Access denied")
 
+    if current_user.role != UserRole.NATIONAL_ADMIN:
+        data.status = TransactionStatus.PENDING
+
     for field, value in data.model_dump(exclude_unset=True).items():
         setattr(record, field, value)
+
+    if current_user.role != UserRole.NATIONAL_ADMIN:
+        record.status = TransactionStatus.PENDING
 
     # Recompute total
     record.expenditure_total = _compute_total({
@@ -171,6 +197,41 @@ async def update_record(
         "expenditure_other": record.expenditure_other,
     })
 
+    try:
+        await db.commit()
+    except Exception as e:
+        await db.rollback()
+        # Check specifically for unique constraint on ref_id
+        if "UNIQUE constraint failed: transactions.ref_id" in str(e):
+            raise HTTPException(status_code=400, detail="A record with this Reference ID already exists.")
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+
+    await db.refresh(record)
+    return TransactionRead.model_validate(record)
+
+
+@router.put("/{record_id}/status", response_model=TransactionRead)
+async def update_record_status(
+    record_id: str,
+    status: TransactionStatus,
+    rejection_reason: str | None = Query(None),
+    current_user: User = Depends(require_active_user),
+    db: AsyncSession = Depends(get_db),
+):
+    if current_user.role != UserRole.NATIONAL_ADMIN:
+        raise HTTPException(status_code=403, detail="Only National Admins can explicitly change status")
+    
+    result = await db.execute(select(Transaction).where(Transaction.id == record_id))
+    record = result.scalar_one_or_none()
+    if not record:
+        raise HTTPException(status_code=404, detail="Record not found")
+        
+    record.status = status
+    if status == TransactionStatus.REJECTED:
+        record.rejection_reason = rejection_reason
+    else:
+        record.rejection_reason = None
+        
     await db.commit()
     await db.refresh(record)
     return TransactionRead.model_validate(record)
@@ -201,7 +262,7 @@ async def get_dashboard_metrics(
     current_user: User = Depends(require_active_user),
     db: AsyncSession = Depends(get_db),
 ):
-    query = select(Transaction)
+    query = select(Transaction).where(Transaction.status == "PUBLISHED")
     if current_user.role == UserRole.STATE_COORDINATOR:
         query = query.where(Transaction.state == current_user.state)
     elif state and state != "all":
@@ -210,7 +271,7 @@ async def get_dashboard_metrics(
     if fy_awarded:
         query = query.where(Transaction.fy_awarded == fy_awarded)
     if vcdp_component:
-        query = query.where(Transaction.vcdp_component == vcdp_component)
+        query = query.where(Transaction.vcdp_component.contains([vcdp_component]))
     if threeFS_primary:
         query = query.where(Transaction.threeFS_primary.contains([threeFS_primary]))
     if programme_phase:
@@ -233,15 +294,18 @@ async def get_dashboard_metrics(
     climate_flagged = len([t for t in transactions if t.climate_flag == "Yes"])
     
     # 3FS Pie Data
-    threefs_data = {}
+    from app.routers.meta import THREEFS_COMPONENTS
+    threefs_data = {key: 0 for key in THREEFS_COMPONENTS.keys()}
     for t in transactions:
         for primary in t.threeFS_primary:
             threefs_data[primary] = threefs_data.get(primary, 0) + t.expenditure_total
     
-    # Trend Data (2013-2025)
-    trend_data = {year: 0 for year in range(2013, 2026)}
+    # Trend Data (2013-Current Year)
+    import datetime
+    current_year = datetime.datetime.now().year
+    trend_data = {year: 0 for year in range(2013, current_year + 1)}
     for t in transactions:
-        if t.fy_awarded and 2013 <= t.fy_awarded <= 2025:
+        if t.fy_awarded and 2013 <= t.fy_awarded <= current_year:
             trend_data[t.fy_awarded] += t.expenditure_total
             
     # State Performance
@@ -287,7 +351,7 @@ async def export_excel(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    query = select(Transaction)
+    query = select(Transaction).where(Transaction.status == "PUBLISHED")
     if current_user.role == UserRole.STATE_COORDINATOR:
         query = query.where(Transaction.state == current_user.state)
     elif state and state != "all":
@@ -326,7 +390,8 @@ async def export_excel(
     ])
 
     # 3FS Breakdown
-    threefs_data = {}
+    from app.routers.meta import THREEFS_COMPONENTS
+    threefs_data = {key: 0 for key in THREEFS_COMPONENTS.keys()}
     for t in transactions:
         for primary in t.threeFS_primary:
             threefs_data[primary] = threefs_data.get(primary, 0) + t.expenditure_total
