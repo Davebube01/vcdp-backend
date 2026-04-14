@@ -1,45 +1,91 @@
-import asyncio
-import json
-import logging
-from sqlalchemy import text
-from app.database import engine, init_db, AsyncSessionLocal
-from app.models import Transaction
+from sqlalchemy import select, text
+from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
+from app.database import engine, init_db, AsyncSessionLocal, Base
+from app.models import State, LGA, User, Project, Document, Transaction
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("deploy")
 
-async def run_migrations():
-    logger.info("Starting deployment migrations...")
+async def migrate_table(sqlite_session, pg_session, model, name):
+    """Sync records for a specific table from SQLite to Postgres."""
+    result = await sqlite_session.execute(select(model))
+    items = result.scalars().all()
+    if not items:
+        return
     
-    # 1. Initialize new tables (e.g., documents)
+    for item in items:
+        data = {k: v for k, v in item.__dict__.items() if not k.startswith('_sa_')}
+        await pg_session.merge(model(**data))
+    await pg_session.commit()
+    logger.info(f"  Synced {len(items)} records for {name}.")
+
+async def sync_data():
+    """Detect if we need to sync from local SQLite to Postgres."""
+    sqlite_path = "vcdp.db"
+    if not os.path.exists(sqlite_path):
+        logger.info("Local vcdp.db not found. Skipping data sync.")
+        return
+
+    # Check if the target is Postgres
+    if "postgresql" not in str(engine.url):
+        logger.info("Target database is not Postgres. Skipping sync.")
+        return
+
+    logger.info("Detected Postgres target and local SQLite source. Starting sync...")
+    
+    sqlite_engine = create_async_engine(f"sqlite+aiosqlite:///{sqlite_path}")
+    SqliteSession = async_sessionmaker(sqlite_engine, expire_on_commit=False)
+    
+    async with SqliteSession() as s_session:
+        async with AsyncSessionLocal() as p_session:
+            try:
+                # Sync in dependency order
+                await migrate_table(s_session, p_session, State, "States")
+                await migrate_table(s_session, p_session, LGA, "LGAs")
+                await migrate_table(s_session, p_session, User, "Users")
+                await migrate_table(s_session, p_session, Project, "Projects")
+                await migrate_table(s_session, p_session, Document, "Documents")
+                await migrate_table(s_session, p_session, Transaction, "Transactions")
+                logger.info("Data sync completed successfully.")
+            except Exception as e:
+                logger.error(f"Error during data sync: {e}")
+                await p_session.rollback()
+            finally:
+                await s_session.close()
+                await p_session.close()
+    
+    await sqlite_engine.dispose()
+
+async def run_migrations():
+    logger.info("Starting deployment workflow...")
+    
+    # 1. Initialize tables on the live server
     await init_db()
-    logger.info("Base tables initialized.")
+    logger.info("Schema initialized.")
 
+    # 2. Automated Sync (SQLite -> Postgres)
+    # This runs every time the server starts, ensuring your dev data is pushed to live
+    await sync_data()
+
+    # 3. Legacy Column Check (for safety)
     async with engine.begin() as conn:
-        # 2. Add sub_funding_sources column if missing
-        try:
-            # Check if column exists (DB specific but we'll try/except)
-            await conn.execute(text("ALTER TABLE transactions ADD COLUMN sub_funding_sources TEXT DEFAULT '[]'"))
-            logger.info("Added sub_funding_sources column.")
-        except Exception:
-            logger.info("sub_funding_sources column already exists or could not be added.")
+        for column, col_type in [("sub_funding_sources", "TEXT DEFAULT '[]'"), ("expenditure_total_reported", "FLOAT DEFAULT 0.0")]:
+            try:
+                await conn.execute(text(f"ALTER TABLE transactions ADD COLUMN {column} {col_type}"))
+                logger.info(f"Ensured {column} exists.")
+            except Exception:
+                pass
 
-        # 3. Add expenditure_total_reported column if missing
-        try:
-            await conn.execute(text("ALTER TABLE transactions ADD COLUMN expenditure_total_reported FLOAT DEFAULT 0.0"))
-            logger.info("Added expenditure_total_reported column.")
-        except Exception:
-            logger.info("expenditure_total_reported column already exists or could not be added.")
+    # 4. Data Harmonization
+    try:
+        from migrate_3fs_v2 import migrate_to_3fs_v2
+        await migrate_to_3fs_v2()
+    except Exception as e:
+        logger.warning(f"Skipping 3FS harmonization: {e}")
 
-    # 4. Harmonize 3FS names (v2)
-    logger.info("Harmonizing 3FS names to v2 structure...")
-    from migrate_3fs_v2 import migrate_to_3fs_v2
-    await migrate_to_3fs_v2()
-
-    # 5. Repair JSON data
-    logger.info("Checking for JSON data repairs...")
+    # 5. Final JSON Safety Check
+    logger.info("Running final JSON data safety checks...")
     async with AsyncSessionLocal() as session:
-        from sqlalchemy import select
         result = await session.execute(select(Transaction))
         transactions = result.scalars().all()
         
@@ -56,8 +102,6 @@ async def run_migrations():
             updated = False
             for field in json_fields:
                 val = getattr(tx, field)
-                
-                # If it's a string, try to ensure it's a JSON array
                 if val is None:
                     setattr(tx, field, [])
                     updated = True
@@ -67,28 +111,21 @@ async def run_migrations():
                         if not isinstance(parsed, list):
                             setattr(tx, field, [parsed])
                             updated = True
-                    except (json.JSONDecodeError, TypeError):
-                        # It's a plain string, wrap in list
-                        if val.strip() == "":
-                            setattr(tx, field, [])
-                        else:
-                            setattr(tx, field, [val])
+                    except:
+                        setattr(tx, field, [val] if val.strip() else [])
                         updated = True
-                elif not isinstance(val, list):
-                    # It's some other type (e.g. number/bool), wrap in list
-                    setattr(tx, field, [val])
-                    updated = True
-            
             if updated:
                 repair_count += 1
         
         if repair_count > 0:
             await session.commit()
-            logger.info(f"Repaired JSON data for {repair_count} records.")
-        else:
-            logger.info("No JSON repairs needed.")
+            logger.info(f"Fixed JSON formatting for {repair_count} records.")
 
-    logger.info("Migrations completed successfully.")
+    logger.info("Deployment workflow completed successfully.")
 
 if __name__ == "__main__":
+    import os
+    import sys
+    sys.path.append(os.getcwd())
     asyncio.run(run_migrations())
+
