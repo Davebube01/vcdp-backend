@@ -1,3 +1,7 @@
+import asyncio
+import json
+import logging
+import os
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 from app.database import engine, init_db, AsyncSessionLocal, Base
@@ -124,7 +128,6 @@ async def run_migrations():
     logger.info("Deployment workflow completed successfully.")
 
 if __name__ == "__main__":
-    import os
     import sys
     sys.path.append(os.getcwd())
     asyncio.run(run_migrations())
