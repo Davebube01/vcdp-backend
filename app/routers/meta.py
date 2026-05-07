@@ -78,28 +78,24 @@ THREEFS_COMPONENTS = {
 
 FUNDING_SOURCES = {
     "Domestic Public Financing": [
-        "FGN counterpart funding", 
-        "State/LGA contribution"
+        "FGN counterpart funding",
+        "State/LGA contribution",
+        "Beneficiary Contribution",
     ],
     "International Development Financing": [
-        "IFAD loan - Official Development Assistance (ODA)", 
-        "Other Official Flows (OOF)"
+        "IFAD loan (Official Development Assistance (ODA))",
+        "IFAD Grants (Official Development Assistance (ODA))",
+        "Other Official Flows (OOF)",
     ],
-    "Private Sector Financing": [
-        "Beneficiary contribution", 
-        "Capital market operators", 
-        "Banking systems"
-    ],
+    "Private Sector Financing": [],
+    "Value Chain Financing": [],
 }
 
 VALUE_CHAIN_SEGMENTS = [
     "Production",
-    "Input Supply",
-    "Post-Harvest",
     "Processing",
-    "Packaging",
-    "Distribution/Marketing",
-    "Other",
+    "Marketing",
+    "Others",
 ]
 
 COMMODITIES = ["Rice", "Cassava", "Cross-cutting"]

@@ -10,32 +10,64 @@ from app.models import State, LGA, User, Project, Document, Transaction
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("deploy")
 
+async def clear_remote_data(session):
+    """Clear all records from target tables for a clean-slate sync."""
+    logger.info("Clearing remote database tables for a clean sync...")
+    # Order matters for foreign key constraints if any
+    tables = ["transactions", "documents", "projects", "users", "lgas", "states"]
+    for table in tables:
+        try:
+            await session.execute(text(f"DELETE FROM {table}"))
+        except Exception as e:
+            logger.warning(f"Could not clear table {table}: {e}")
+    await session.commit()
+
 async def migrate_table(sqlite_session, pg_session, model, name):
-    """Sync records for a specific table from SQLite to Postgres."""
+    """Sync records for a specific table from SQLite to Postgres with JSON parsing."""
     result = await sqlite_session.execute(select(model))
     items = result.scalars().all()
     if not items:
+        logger.info(f"  No records found for {name}.")
         return
     
+    # List of fields that we know should be JSON (lists/dicts)
+    json_fields = {
+        "commodity", "vcdp_component", "vcdp_sub_components", "lgas", 
+        "threeFS_primary", "threeFS_sub_components", "fiscal_quarter",
+        "funding_sources", "sub_funding_sources", "beneficiary_categories",
+        "value_chain_segments", "data_source", "supporting_documents",
+        "cofog_divisions", "cofog_groups", "quarterly_beneficiary_data"
+    }
+
     for item in items:
         data = {k: v for k, v in item.__dict__.items() if not k.startswith('_sa_')}
-        await pg_session.merge(model(**data))
+        
+        # Postgres JSON Correction: If a field is supposed to be JSON but arrives as a string, parse it.
+        for field, value in data.items():
+            if field in json_fields and isinstance(value, str):
+                try:
+                    data[field] = json.loads(value)
+                except (json.JSONDecodeError, TypeError):
+                    # If it's not valid JSON, treat it as a single-item list or empty
+                    data[field] = [value] if value.strip() else []
+        
+        pg_session.add(model(**data))
+    
     await pg_session.commit()
     logger.info(f"  Synced {len(items)} records for {name}.")
 
 async def sync_data():
-    """Detect if we need to sync from local SQLite to Postgres."""
+    """Sync all data from local SQLite to Postgres."""
     sqlite_path = "vcdp.db"
     if not os.path.exists(sqlite_path):
-        logger.info("Local vcdp.db not found. Skipping data sync.")
+        logger.error("Local vcdp.db not found! Cannot sync data.")
         return
 
-    # Check if the target is Postgres
     if "postgresql" not in str(engine.url):
-        logger.info("Target database is not Postgres. Skipping sync.")
+        logger.info("Target database is not Postgres. Data sync is only for live deployment.")
         return
 
-    logger.info("Detected Postgres target and local SQLite source. Starting sync...")
+    logger.info("Detected Postgres target. Starting fresh data sync from local SQLite...")
     
     sqlite_engine = create_async_engine(f"sqlite+aiosqlite:///{sqlite_path}")
     SqliteSession = async_sessionmaker(sqlite_engine, expire_on_commit=False)
@@ -43,17 +75,22 @@ async def sync_data():
     async with SqliteSession() as s_session:
         async with AsyncSessionLocal() as p_session:
             try:
-                # Sync in dependency order
+                # 1. Clear remote data first
+                await clear_remote_data(p_session)
+                
+                # 2. Sync in dependency order
                 await migrate_table(s_session, p_session, State, "States")
                 await migrate_table(s_session, p_session, LGA, "LGAs")
                 await migrate_table(s_session, p_session, User, "Users")
                 await migrate_table(s_session, p_session, Project, "Projects")
                 await migrate_table(s_session, p_session, Document, "Documents")
                 await migrate_table(s_session, p_session, Transaction, "Transactions")
-                logger.info("Data sync completed successfully.")
+                
+                logger.info("Fresh data sync completed successfully.")
             except Exception as e:
                 logger.error(f"Error during data sync: {e}")
                 await p_session.rollback()
+                raise e
             finally:
                 await s_session.close()
                 await p_session.close()
@@ -61,33 +98,16 @@ async def sync_data():
     await sqlite_engine.dispose()
 
 async def run_migrations():
-    logger.info("Starting deployment workflow...")
+    logger.info("Starting updated deployment workflow...")
     
-    # 1. Initialize tables on the live server
+    # 1. Initialize schema (ensure all columns exist)
     await init_db()
     logger.info("Schema initialized.")
 
-    # 2. Automated Sync (SQLite -> Postgres)
-    # This runs every time the server starts, ensuring your dev data is pushed to live
+    # 2. Automated Fresh Sync (SQLite -> Postgres)
     await sync_data()
 
-    # 3. Legacy Column Check (for safety)
-    async with engine.begin() as conn:
-        for column, col_type in [("sub_funding_sources", "TEXT DEFAULT '[]'"), ("expenditure_total_reported", "FLOAT DEFAULT 0.0")]:
-            try:
-                await conn.execute(text(f"ALTER TABLE transactions ADD COLUMN {column} {col_type}"))
-                logger.info(f"Ensured {column} exists.")
-            except Exception:
-                pass
-
-    # 4. Data Harmonization
-    try:
-        from migrate_3fs_v2 import migrate_to_3fs_v2
-        await migrate_to_3fs_v2()
-    except Exception as e:
-        logger.warning(f"Skipping 3FS harmonization: {e}")
-
-    # 5. Final JSON Safety Check
+    # 3. Final JSON Safety Check (including new COFOG fields)
     logger.info("Running final JSON data safety checks...")
     async with AsyncSessionLocal() as session:
         result = await session.execute(select(Transaction))
@@ -98,7 +118,8 @@ async def run_migrations():
             "threeFS_primary", "threeFS_sub_components", 
             "funding_sources", "sub_funding_sources", 
             "beneficiary_categories", "value_chain_segments", 
-            "data_source", "supporting_documents"
+            "data_source", "supporting_documents",
+            "cofog_divisions", "cofog_groups"
         ]
         
         repair_count = 0
@@ -125,7 +146,7 @@ async def run_migrations():
             await session.commit()
             logger.info(f"Fixed JSON formatting for {repair_count} records.")
 
-    logger.info("Deployment workflow completed successfully.")
+    logger.info("Deployment preparation completed. System is ready for live traffic.")
 
 if __name__ == "__main__":
     import sys

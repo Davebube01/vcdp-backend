@@ -28,18 +28,19 @@ async def create_project(
     current_user: User = Depends(require_national_admin),
 ):
     """Create a new project (Admin Only)."""
-    # Check if a project with the same ref_id exists
-    existing = await db.execute(select(Project).where(Project.ref_id == data.ref_id))
+    # Check if a project with the same code exists
+    existing = await db.execute(select(Project).where(Project.activity_type_code == data.activity_type_code))
     if existing.scalar_one_or_none():
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="A project with this reference ID already exists."
+            detail="A project with this Activity Type Code already exists."
         )
 
     new_project = Project(
         id=str(uuid.uuid4()),
-        ref_id=data.ref_id,
+        activity_type_code=data.activity_type_code,
         name=data.name,
+        vcdp_component=data.vcdp_component,
         created_by=current_user.id
     )
     db.add(new_project)
@@ -61,14 +62,17 @@ async def update_project(
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
         
-    if data.ref_id is not None and data.ref_id != project.ref_id:
-        existing = await db.execute(select(Project).where(Project.ref_id == data.ref_id))
+    if data.activity_type_code is not None and data.activity_type_code != project.activity_type_code:
+        existing = await db.execute(select(Project).where(Project.activity_type_code == data.activity_type_code))
         if existing.scalar_one_or_none():
-            raise HTTPException(status_code=400, detail="Another project with this reference ID already exists.")
-        project.ref_id = data.ref_id
+            raise HTTPException(status_code=400, detail="Another project with this code already exists.")
+        project.activity_type_code = data.activity_type_code
         
     if data.name is not None:
         project.name = data.name
+
+    if data.vcdp_component is not None:
+        project.vcdp_component = data.vcdp_component
         
     await db.commit()
     await db.refresh(project)

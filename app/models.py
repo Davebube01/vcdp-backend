@@ -5,7 +5,8 @@ from sqlalchemy import (
     JSON, func
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-from app.database import Base, PG_JSON
+from app.database import Base
+from sqlalchemy import JSON as PG_JSON
 import enum
 
 
@@ -48,6 +49,11 @@ class TransactionStatus(str, enum.Enum):
     REJECTED = "REJECTED"
     DRAFT = "DRAFT"
     PUBLISHED = "PUBLISHED"
+
+
+class Currency(str, enum.Enum):
+    USD = "USD"
+    NGN = "NGN"
 
 
 # ─────────────────────────────────────────────
@@ -104,7 +110,7 @@ class Transaction(Base):
     id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
 
     # Fields 1–2: Ref ID / Project Name
-    ref_id: Mapped[str] = mapped_column(String(100), unique=True, nullable=False, index=True)
+    ref_id: Mapped[str | None] = mapped_column(String(100), unique=True, nullable=True, index=True)
     project_name: Mapped[str] = mapped_column(String(300), nullable=False)
 
     # Field 3: Commodity (stored as JSON list)
@@ -117,8 +123,11 @@ class Transaction(Base):
     # Field 6: Programme Phase (auto-derived from fy_awarded)
     programme_phase: Mapped[str | None] = mapped_column(String(50))
 
-    # Field 7: Fiscal Quarter
-    fiscal_quarter: Mapped[str | None] = mapped_column(String(10))
+    # Field 7: Fiscal Quarter (Stored as list or string)
+    fiscal_quarter: Mapped[list | None] = mapped_column(PG_JSON, default=list)
+    record_type: Mapped[str] = mapped_column(String(20), default="Actual")  # Actual or Budget
+    currency: Mapped[Currency] = mapped_column(SAEnum(Currency), default=Currency.USD)
+    exchange_rate: Mapped[float] = mapped_column(Float, default=1.0)
 
     # Fields 8–9: VCDP Component / Sub-Component
     vcdp_component: Mapped[list] = mapped_column(PG_JSON, default=list)
@@ -134,6 +143,8 @@ class Transaction(Base):
 
     # Field 14: COFOG Code
     cofog_code: Mapped[str | None] = mapped_column(String(50))
+    cofog_divisions: Mapped[list] = mapped_column(PG_JSON, default=list)
+    cofog_groups: Mapped[list] = mapped_column(PG_JSON, default=list)
 
     # Fields 15–16: Funding Source / Sub-Source
     funding_sources: Mapped[list] = mapped_column(PG_JSON, default=list)
@@ -143,9 +154,13 @@ class Transaction(Base):
     expenditure_fgn: Mapped[float] = mapped_column(Float, default=0.0)
     expenditure_state: Mapped[float] = mapped_column(Float, default=0.0)
     expenditure_ifad: Mapped[float] = mapped_column(Float, default=0.0)
+    expenditure_ifad_loan: Mapped[float] = mapped_column(Float, default=0.0)
+    expenditure_ifad_grant: Mapped[float] = mapped_column(Float, default=0.0)
     expenditure_oof: Mapped[float] = mapped_column(Float, default=0.0)
     expenditure_beneficiary: Mapped[float] = mapped_column(Float, default=0.0)
     expenditure_other: Mapped[float] = mapped_column(Float, default=0.0)
+    expenditure_private_sector: Mapped[float] = mapped_column(Float, default=0.0)
+    expenditure_value_chain: Mapped[float] = mapped_column(Float, default=0.0)
     expenditure_total: Mapped[float] = mapped_column(Float, default=0.0)
     expenditure_total_reported: Mapped[float] = mapped_column(Float, default=0.0)
 
@@ -159,9 +174,15 @@ class Transaction(Base):
     beneficiary_female_percentage: Mapped[float | None] = mapped_column()
     beneficiary_youth_percentage: Mapped[float | None] = mapped_column()
     beneficiary_plwd: Mapped[int | None] = mapped_column()
+    unit: Mapped[str | None] = mapped_column(String(50), default="Person")
+    executing_agency: Mapped[str | None] = mapped_column(String(200))
+    institution_code: Mapped[str | None] = mapped_column(String(50))
+    activity_type_code: Mapped[str | None] = mapped_column(String(100))
+    quarterly_beneficiary_data: Mapped[dict | None] = mapped_column(PG_JSON, default=dict)
 
     # Field 19: Value Chain Segment
     value_chain_segments: Mapped[list] = mapped_column(PG_JSON, default=list)
+    value_chain_segments_other: Mapped[str | None] = mapped_column(Text)
 
     # Field 20: Climate/Environment Flag
     climate_flag: Mapped[str | None] = mapped_column(String(5))
@@ -208,9 +229,21 @@ class Project(Base):
     __tablename__ = "projects"
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
-    ref_id: Mapped[str] = mapped_column(String(100), unique=True, nullable=False, index=True)
+    activity_type_code: Mapped[str] = mapped_column(String(100), unique=True, nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(300), nullable=False)
+    vcdp_component: Mapped[str | None] = mapped_column(String(100))
     created_by: Mapped[str | None] = mapped_column(ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     creator: Mapped["User | None"] = relationship("User")
+
+
+class Institution(Base):
+    __tablename__ = "institutions"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    state: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    code: Mapped[str] = mapped_column(String(50), nullable=False) # e.g. SPMU
+    name: Mapped[str] = mapped_column(String(200), nullable=False) # e.g. State Programme Management Unit
+    
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

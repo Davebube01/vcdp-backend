@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Optional
 from pydantic import BaseModel, EmailStr, field_validator
 from pydantic import BaseModel, EmailStr, field_validator
-from app.models import UserRole, TransactionStatus
+from app.models import UserRole, TransactionStatus, Currency
 
 
 # ─────────────────────────────────────────────
@@ -61,7 +61,7 @@ class TransactionCreate(BaseModel):
     fy_awarded: Optional[int] = None
     fy_completed: Optional[int] = None
     programme_phase: Optional[str] = None
-    fiscal_quarter: Optional[str] = None
+    fiscal_quarter: list[str] = []
     vcdp_component: list[str] = []
     vcdp_sub_components: list[str] = []
     state: str
@@ -69,14 +69,20 @@ class TransactionCreate(BaseModel):
     threeFS_primary: list[str] = []
     threeFS_sub_components: list[str] = []
     cofog_code: Optional[str] = None
+    cofog_divisions: list[str] = []
+    cofog_groups: list[str] = []
     funding_sources: list[str] = []
     sub_funding_sources: list[str] = []
     expenditure_fgn: float = 0.0
     expenditure_state: float = 0.0
     expenditure_ifad: float = 0.0
+    expenditure_ifad_loan: float = 0.0
+    expenditure_ifad_grant: float = 0.0
     expenditure_oof: float = 0.0
     expenditure_beneficiary: float = 0.0
     expenditure_other: float = 0.0
+    expenditure_private_sector: float = 0.0
+    expenditure_value_chain: float = 0.0
     expenditure_total_reported: float = 0.0
     beneficiary_categories: list[str] = []
     beneficiary_total: Optional[int] = None
@@ -88,12 +94,21 @@ class TransactionCreate(BaseModel):
     beneficiary_youth_percentage: Optional[float] = None
     beneficiary_plwd: Optional[int] = None
     value_chain_segments: list[str] = []
+    value_chain_segments_other: Optional[str] = None
     climate_flag: Optional[str] = None
     data_source: list[str] = []
     supporting_documents: list[str] = []
+    unit: str = "Person"
+    executing_agency: Optional[str] = None
+    quarterly_beneficiary_data: dict = {}
     classification_notes: Optional[str] = None
     status: Optional[TransactionStatus] = TransactionStatus.PUBLISHED
     rejection_reason: Optional[str] = None
+    record_type: str = "Actual"
+    institution_code: Optional[str] = None
+    activity_type_code: Optional[str] = None
+    currency: Currency = Currency.USD
+    exchange_rate: float = 1.0
 
     @field_validator("expenditure_fgn", "expenditure_state", "expenditure_ifad",
                      "expenditure_oof", "expenditure_beneficiary", "expenditure_other")
@@ -115,42 +130,58 @@ class TransactionRead(BaseModel):
     id: str
     ref_id: str
     project_name: str
-    commodity: list[str]
-    fy_awarded: Optional[int]
-    fy_completed: Optional[int]
-    programme_phase: Optional[str]
-    fiscal_quarter: Optional[str]
-    vcdp_component: list[str] = []
-    vcdp_sub_components: list[str]
+    commodity: Optional[list[str]] = []
+    fy_awarded: Optional[int] = None
+    fy_completed: Optional[int] = None
+    programme_phase: Optional[str] = None
+    fiscal_quarter: Optional[list[str]] = []
+    vcdp_component: Optional[list[str]] = []
+    vcdp_sub_components: Optional[list[str]] = []
     state: str
-    lgas: list[str]
-    threeFS_primary: list[str]
-    threeFS_sub_components: list[str]
-    funding_sources: list[str]
-    sub_funding_sources: list[str]
-    expenditure_fgn: float
-    expenditure_state: float
-    expenditure_ifad: float
-    expenditure_oof: float
-    expenditure_beneficiary: float
-    expenditure_other: float
-    expenditure_total: float
-    expenditure_total_reported: float
-    beneficiary_categories: list[str]
-    beneficiary_total: Optional[int]
-    beneficiary_male: Optional[int]
-    beneficiary_female: Optional[int]
-    beneficiary_youth_under35: Optional[int]
-    beneficiary_plwd: Optional[int]
-    value_chain_segments: list[str]
-    climate_flag: Optional[str]
-    data_source: list[str]
-    supporting_documents: list[str]
-    entered_by: Optional[str]
+    lgas: Optional[list[str]] = []
+    threeFS_primary: Optional[list[str]] = []
+    threeFS_sub_components: Optional[list[str]] = []
+    cofog_code: Optional[str] = None
+    cofog_divisions: Optional[list[str]] = []
+    cofog_groups: Optional[list[str]] = []
+    funding_sources: Optional[list[str]] = []
+    sub_funding_sources: Optional[list[str]] = []
+    expenditure_fgn: float = 0.0
+    expenditure_state: float = 0.0
+    expenditure_ifad: float = 0.0
+    expenditure_ifad_loan: float = 0.0
+    expenditure_ifad_grant: float = 0.0
+    expenditure_oof: float = 0.0
+    expenditure_beneficiary: float = 0.0
+    expenditure_other: float = 0.0
+    expenditure_private_sector: float = 0.0
+    expenditure_value_chain: float = 0.0
+    expenditure_total: float = 0.0
+    expenditure_total_reported: float = 0.0
+    beneficiary_categories: Optional[list[str]] = []
+    beneficiary_total: Optional[int] = None
+    beneficiary_male: Optional[int] = None
+    beneficiary_female: Optional[int] = None
+    beneficiary_youth_under35: Optional[int] = None
+    beneficiary_plwd: Optional[int] = None
+    value_chain_segments: Optional[list[str]] = []
+    value_chain_segments_other: Optional[str] = None
+    executing_agency: Optional[str] = None
+    climate_flag: Optional[str] = None
+    data_source: Optional[list[str]] = []
+    supporting_documents: Optional[list[str]] = []
+    unit: str = "Person"
+    quarterly_beneficiary_data: dict = {}
+    entered_by: Optional[str] = None
     entered_at: datetime
-    classification_notes: Optional[str]
+    classification_notes: Optional[str] = None
     status: TransactionStatus
-    rejection_reason: Optional[str]
+    rejection_reason: Optional[str] = None
+    record_type: str = "Actual"
+    institution_code: Optional[str] = None
+    activity_type_code: Optional[str] = None
+    currency: Currency = Currency.USD
+    exchange_rate: float = 1.0
 
     model_config = {"from_attributes": True}
 
@@ -161,7 +192,7 @@ class TransactionUpdate(BaseModel):
     fy_awarded: Optional[int] = None
     fy_completed: Optional[int] = None
     programme_phase: Optional[str] = None
-    fiscal_quarter: Optional[str] = None
+    fiscal_quarter: Optional[list[str]] = None
     vcdp_component: Optional[list[str]] = None
     vcdp_sub_components: Optional[list[str]] = None
     state: Optional[str] = None
@@ -169,14 +200,20 @@ class TransactionUpdate(BaseModel):
     threeFS_primary: Optional[list[str]] = None
     threeFS_sub_components: Optional[list[str]] = None
     cofog_code: Optional[str] = None
+    cofog_divisions: Optional[list[str]] = None
+    cofog_groups: Optional[list[str]] = None
     funding_sources: Optional[list[str]] = None
     sub_funding_sources: Optional[list[str]] = None
     expenditure_fgn: Optional[float] = None
     expenditure_state: Optional[float] = None
     expenditure_ifad: Optional[float] = None
+    expenditure_ifad_loan: Optional[float] = None
+    expenditure_ifad_grant: Optional[float] = None
     expenditure_oof: Optional[float] = None
     expenditure_beneficiary: Optional[float] = None
     expenditure_other: Optional[float] = None
+    expenditure_private_sector: Optional[float] = None
+    expenditure_value_chain: Optional[float] = None
     expenditure_total_reported: Optional[float] = None
     beneficiary_categories: Optional[list[str]] = None
     beneficiary_total: Optional[int] = None
@@ -187,10 +224,18 @@ class TransactionUpdate(BaseModel):
     beneficiary_youth_under35: Optional[int] = None
     beneficiary_plwd: Optional[int] = None
     value_chain_segments: Optional[list[str]] = None
+    value_chain_segments_other: Optional[str] = None
     climate_flag: Optional[str] = None
     data_source: Optional[list[str]] = None
     supporting_documents: Optional[list[str]] = None
+    unit: Optional[str] = None
+    quarterly_beneficiary_data: Optional[dict] = None
     classification_notes: Optional[str] = None
+    record_type: Optional[str] = None
+    institution_code: Optional[str] = None
+    activity_type_code: Optional[str] = None
+    currency: Optional[Currency] = None
+    exchange_rate: Optional[float] = None
 
 
 # ─────────────────────────────────────────────
@@ -250,18 +295,43 @@ class DocumentRead(DocumentBase):
 # ─────────────────────────────────────────────
 
 class ProjectBase(BaseModel):
-    ref_id: str
+    activity_type_code: str
     name: str
+    vcdp_component: Optional[str] = None
 
 class ProjectCreate(ProjectBase):
     pass
 
 class ProjectUpdate(BaseModel):
-    ref_id: str | None = None
-    name: str | None = None
+    activity_type_code: Optional[str] = None
+    name: Optional[str] = None
+    vcdp_component: Optional[str] = None
 
 class ProjectRead(ProjectBase):
     id: str
     created_by: str | None
+    created_at: datetime
+    model_config = {"from_attributes": True}
+
+
+# ─────────────────────────────────────────────
+# Institution Schemas
+# ─────────────────────────────────────────────
+
+class InstitutionBase(BaseModel):
+    state: str
+    code: str
+    name: str
+
+class InstitutionCreate(InstitutionBase):
+    pass
+
+class InstitutionUpdate(BaseModel):
+    state: Optional[str] = None
+    code: Optional[str] = None
+    name: Optional[str] = None
+
+class InstitutionRead(InstitutionBase):
+    id: str
     created_at: datetime
     model_config = {"from_attributes": True}
