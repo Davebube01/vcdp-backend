@@ -57,6 +57,8 @@ class TokenResponse(BaseModel):
 class TransactionCreate(BaseModel):
     ref_id: str
     project_name: str
+    activity_name: Optional[str] = None
+    category_costcode: Optional[str] = None
     commodity: list[str] = []
     fy_awarded: Optional[int] = None
     fy_completed: Optional[int] = None
@@ -130,6 +132,8 @@ class TransactionRead(BaseModel):
     id: str
     ref_id: str
     project_name: str
+    activity_name: Optional[str] = None
+    category_costcode: Optional[str] = None
     commodity: Optional[list[str]] = []
     fy_awarded: Optional[int] = None
     fy_completed: Optional[int] = None
@@ -188,6 +192,8 @@ class TransactionRead(BaseModel):
 
 class TransactionUpdate(BaseModel):
     project_name: Optional[str] = None
+    activity_name: Optional[str] = None
+    category_costcode: Optional[str] = None
     commodity: Optional[list[str]] = None
     fy_awarded: Optional[int] = None
     fy_completed: Optional[int] = None

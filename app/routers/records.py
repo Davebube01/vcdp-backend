@@ -1,5 +1,5 @@
 import math
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, or_
@@ -631,7 +631,9 @@ async def export_csv(
         usd_total = _to_usd(raw_total, t.currency)
         record_data.append({
             "Ref ID": t.ref_id or "",
+            "Activity Name": t.activity_name or "",
             "Activity Code": t.activity_type_code or "",
+            "Category / Costcode": t.category_costcode or "",
             "Project Name": t.project_name,
             "Record Type": t.record_type or "Actual",
             "Status": t.status,
@@ -673,3 +675,337 @@ async def export_csv(
         headers=headers,
         media_type='text/csv'
     )
+
+
+VALID_STATE_TABS = [
+    'Anambra', 'Benue', 'Ebonyi', 'Enugu', 'Kogi', 
+    'Nasarawa', 'Niger', 'Ogun', 'Taraba'
+]
+
+# The mapping from frontend schema to Excel column names
+TEMPLATE_COLUMNS = [
+    "Ref ID",
+    "Project / Activity Name",
+    "Activity Name",
+    "Activity Code",
+    "Category / Costcode",
+    "Record Type",
+    "Status",
+    "Institution Code",
+    "Executing Agency",
+    "FY Awarded",
+    "FY Completed",
+    "Programme Phase",
+    "Fiscal Quarter",
+    "LGA(s)",
+    "Commodity",
+    "VCDP Component",
+    "VCDP Sub-Component(s)",
+    "3FS Primary Component",
+    "3FS Sub-Component(s)",
+    "COFOG Code",
+    "COFOG Division(s)",
+    "COFOG Group(s)",
+    "Funding Sources",
+    "Sub Funding Sources",
+    "Currency",
+    "Exchange Rate",
+    "Expenditure – FGN",
+    "Expenditure - State",
+    "Expenditure - IFAD Loan",
+    "Expenditure - IFAD Grant",
+    "Expenditure - OOF",
+    "Expenditure - Beneficiary",
+    "Expenditure - Private Sector",
+    "Expenditure - Value Chain",
+    "Expenditure - Other",
+    "Expenditure - Total Reported",
+    "Beneficiary Unit",
+    "Beneficiaries – Total",
+    "Beneficiaries - Male",
+    "Beneficiaries - Female",
+    "Beneficiaries - Youth (<35)",
+    "Beneficiaries - PLWD",
+    "Beneficiary Categories",
+    "Quantity Q1",
+    "Quantity Q2",
+    "Quantity Q3",
+    "Quantity Q4",
+    "Value Chain Segment(s)",
+    "Value Chain Segments (Other)",
+    "Climate Aligned?",
+    "Data Source(s)",
+    "Classification Notes"
+]
+
+@router.get("/bulk-upload/template")
+async def download_bulk_upload_template(
+    token: str | None = Query(None),
+    current_user: User = Depends(get_current_user),
+):
+    output = io.BytesIO()
+    
+    # Create empty dataframe with our master columns
+    df = pd.DataFrame(columns=TEMPLATE_COLUMNS)
+    
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        for state in VALID_STATE_TABS:
+            # If state coordinator, maybe only generate their state?
+            if current_user.role == UserRole.STATE_COORDINATOR and current_user.state != state:
+                continue
+            df.to_excel(writer, index=False, sheet_name=state)
+            
+            # Auto-adjust column widths for better UX
+            worksheet = writer.sheets[state]
+            for col in worksheet.columns:
+                max_length = 0
+                column = col[0].column_letter
+                for cell in col:
+                    try:
+                        if len(str(cell.value)) > max_length:
+                            max_length = len(cell.value)
+                    except:
+                        pass
+                adjusted_width = (max_length + 2)
+                worksheet.column_dimensions[column].width = adjusted_width
+
+    output.seek(0)
+    
+    filename = f"VCDP_Bulk_Upload_Template_{datetime.now().strftime('%Y%m%d')}.xlsx"
+    headers = {
+        'Content-Disposition': f'attachment; filename="{filename}"'
+    }
+    
+    return StreamingResponse(
+        output,
+        headers=headers,
+        media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    )
+
+import json
+from pydantic import ValidationError
+
+def safe_float(val):
+    if pd.isna(val) or val == "":
+        return 0.0
+    try:
+        return float(val)
+    except:
+        return 0.0
+
+def safe_int(val):
+    if pd.isna(val) or val == "":
+        return None
+    try:
+        return int(float(val))
+    except:
+        return None
+
+def safe_str(val):
+    if pd.isna(val):
+        return None
+    return str(val).strip()
+
+def safe_list(val):
+    if pd.isna(val) or not str(val).strip():
+        return []
+    # Try parsing as JSON array if it looks like one, otherwise split by comma
+    val_str = str(val).strip()
+    if val_str.startswith('[') and val_str.endswith(']'):
+        try:
+            return json.loads(val_str)
+        except:
+            pass
+    return [item.strip() for item in val_str.split(',') if item.strip()]
+
+@router.post("/bulk-upload")
+async def process_bulk_upload(
+    file: UploadFile = File(...),
+    current_user: User = Depends(require_active_user),
+    db: AsyncSession = Depends(get_db)
+):
+    if not file.filename.endswith('.xlsx'):
+        raise HTTPException(status_code=400, detail="Only .xlsx files are supported")
+
+    contents = await file.read()
+    
+    try:
+        xls = pd.ExcelFile(io.BytesIO(contents))
+    except Exception as e:
+        raise HTTPException(status_code=400, detail="Invalid Excel file format")
+
+    uploaded_records = []
+    errors = []
+    
+    for sheet_name in xls.sheet_names:
+        if sheet_name not in VALID_STATE_TABS:
+            continue
+            
+        if current_user.role == UserRole.STATE_COORDINATOR and current_user.state != sheet_name:
+            continue
+            
+        df = pd.read_excel(xls, sheet_name=sheet_name)
+        
+        if df.empty:
+            continue
+
+        for index, row in df.iterrows():
+            row_num = index + 2 # +2 because 0-indexed and header row
+            
+            project_name = safe_str(row.get("Project / Activity Name"))
+            if not project_name:
+                continue # Skip truly empty rows
+                
+            try:
+                # Map to TransactionCreate
+                q1 = safe_float(row.get("Quantity Q1"))
+                q2 = safe_float(row.get("Quantity Q2"))
+                q3 = safe_float(row.get("Quantity Q3"))
+                q4 = safe_float(row.get("Quantity Q4"))
+                
+                quarterly_data = {}
+                if q1 > 0: quarterly_data["Q1"] = {"total": q1, "male": 0, "female": 0, "youth_under35": 0, "plwd": 0}
+                if q2 > 0: quarterly_data["Q2"] = {"total": q2, "male": 0, "female": 0, "youth_under35": 0, "plwd": 0}
+                if q3 > 0: quarterly_data["Q3"] = {"total": q3, "male": 0, "female": 0, "youth_under35": 0, "plwd": 0}
+                if q4 > 0: quarterly_data["Q4"] = {"total": q4, "male": 0, "female": 0, "youth_under35": 0, "plwd": 0}
+                
+                # Try parsing the status
+                raw_status = safe_str(row.get("Status"))
+                status = TransactionStatus.PUBLISHED # default
+                if raw_status:
+                    try:
+                        status = TransactionStatus(raw_status)
+                    except:
+                        pass
+                        
+                currency_val = safe_str(row.get("Currency"))
+                currency = "NGN" # default to NGN as requested
+                if currency_val and currency_val.upper() == "USD":
+                    currency = "USD"
+
+                record_data = {
+                    "ref_id": safe_str(row.get("Ref ID")) or "",
+                    "project_name": project_name,
+                    "activity_name": safe_str(row.get("Activity Name")),
+                    "activity_type_code": safe_str(row.get("Activity Code")),
+                    "category_costcode": safe_str(row.get("Category / Costcode")),
+                    "record_type": safe_str(row.get("Record Type")) or "Actual",
+                    "status": status,
+                    "institution_code": safe_str(row.get("Institution Code")),
+                    "executing_agency": safe_str(row.get("Executing Agency")),
+                    
+                    "state": sheet_name,
+                    "lgas": safe_list(row.get("LGA(s)")),
+                    
+                    "fy_awarded": safe_int(row.get("FY Awarded")),
+                    "fy_completed": safe_int(row.get("FY Completed")),
+                    "programme_phase": safe_str(row.get("Programme Phase")),
+                    "fiscal_quarter": safe_list(row.get("Fiscal Quarter")),
+                    
+                    "commodity": safe_list(row.get("Commodity")),
+                    "vcdp_component": safe_list(row.get("VCDP Component")),
+                    "vcdp_sub_components": safe_list(row.get("VCDP Sub-Component(s)")),
+                    "threeFS_primary": safe_list(row.get("3FS Primary Component")),
+                    "threeFS_sub_components": safe_list(row.get("3FS Sub-Component(s)")),
+                    
+                    "cofog_code": safe_str(row.get("COFOG Code")),
+                    "cofog_divisions": safe_list(row.get("COFOG Division(s)")),
+                    "cofog_groups": safe_list(row.get("COFOG Group(s)")),
+                    
+                    "funding_sources": safe_list(row.get("Funding Sources")),
+                    "sub_funding_sources": safe_list(row.get("Sub Funding Sources")),
+                    "currency": currency,
+                    "exchange_rate": safe_float(row.get("Exchange Rate")) or 1.0,
+                    
+                    "expenditure_fgn": safe_float(row.get("Expenditure – FGN")),
+                    "expenditure_state": safe_float(row.get("Expenditure - State")),
+                    "expenditure_ifad_loan": safe_float(row.get("Expenditure - IFAD Loan")),
+                    "expenditure_ifad_grant": safe_float(row.get("Expenditure - IFAD Grant")),
+                    "expenditure_oof": safe_float(row.get("Expenditure - OOF")),
+                    "expenditure_beneficiary": safe_float(row.get("Expenditure - Beneficiary")),
+                    "expenditure_private_sector": safe_float(row.get("Expenditure - Private Sector")),
+                    "expenditure_value_chain": safe_float(row.get("Expenditure - Value Chain")),
+                    "expenditure_other": safe_float(row.get("Expenditure - Other")),
+                    "expenditure_total_reported": safe_float(row.get("Expenditure - Total Reported")),
+                    
+                    # Also set the legacy ones to prevent errors if required
+                    "expenditure_ifad": safe_float(row.get("Expenditure - IFAD Loan")) + safe_float(row.get("Expenditure - IFAD Grant")),
+                    
+                    "unit": safe_str(row.get("Beneficiary Unit")) or "Person",
+                    "beneficiary_total": safe_int(row.get("Beneficiaries – Total")),
+                    "beneficiary_male": safe_int(row.get("Beneficiaries - Male")),
+                    "beneficiary_female": safe_int(row.get("Beneficiaries - Female")),
+                    "beneficiary_youth_under35": safe_int(row.get("Beneficiaries - Youth (<35)")),
+                    "beneficiary_plwd": safe_int(row.get("Beneficiaries - PLWD")),
+                    "beneficiary_categories": safe_list(row.get("Beneficiary Categories")),
+                    
+                    "quarterly_beneficiary_data": quarterly_data,
+                    
+                    "value_chain_segments": safe_list(row.get("Value Chain Segment(s)")),
+                    "value_chain_segments_other": safe_str(row.get("Value Chain Segments (Other)")),
+                    "climate_flag": safe_str(row.get("Climate Aligned?")),
+                    "data_source": safe_list(row.get("Data Source(s)")) or ["Bulk Upload"],
+                    "classification_notes": safe_str(row.get("Classification Notes"))
+                }
+                
+                # Check for absolute requirements before Pydantic parsing
+                if not record_data.get("lgas"):
+                    errors.append({"sheet": sheet_name, "row": row_num, "error": "LGA(s) is required"})
+                    continue
+                if not record_data.get("threeFS_primary"):
+                    errors.append({"sheet": sheet_name, "row": row_num, "error": "3FS Primary Component is required"})
+                    continue
+                    
+                # Validate with Pydantic
+                transaction_create = TransactionCreate(**record_data)
+                
+                # Re-compute total using the function
+                total = _compute_total(transaction_create.model_dump())
+                
+                phase = transaction_create.programme_phase or _derive_phase(transaction_create.fy_awarded)
+                
+                if current_user.role != UserRole.NATIONAL_ADMIN:
+                    transaction_create.status = TransactionStatus.PENDING
+                elif not transaction_create.status:
+                    transaction_create.status = TransactionStatus.DRAFT
+                
+                db_record = Transaction(
+                    **transaction_create.model_dump(exclude={"programme_phase"}),
+                    programme_phase=phase,
+                    expenditure_total=total,
+                    entered_by=current_user.id,
+                )
+                
+                if not db_record.ref_id:
+                    import uuid
+                    db_record.ref_id = f"BU-{uuid.uuid4().hex[:8].upper()}"
+                
+                if current_user.role != UserRole.NATIONAL_ADMIN:
+                    db_record.status = TransactionStatus.PENDING
+                    
+                uploaded_records.append(db_record)
+                
+            except ValidationError as ve:
+                err_msgs = [f"{e['loc'][-1]}: {e['msg']}" for e in ve.errors()]
+                errors.append({"sheet": sheet_name, "row": row_num, "error": "; ".join(err_msgs)})
+            except Exception as e:
+                errors.append({"sheet": sheet_name, "row": row_num, "error": str(e)})
+                
+    # Save valid records
+    success_count = 0
+    if uploaded_records:
+        try:
+            db.add_all(uploaded_records)
+            await db.commit()
+            success_count = len(uploaded_records)
+        except Exception as e:
+            await db.rollback()
+            raise HTTPException(status_code=500, detail=f"Database error during batch insert: {str(e)}")
+
+    return {
+        "success": True,
+        "message": f"Successfully imported {success_count} records.",
+        "success_count": success_count,
+        "error_count": len(errors),
+        "errors": errors
+    }

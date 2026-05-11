@@ -112,6 +112,8 @@ class Transaction(Base):
     # Fields 1–2: Ref ID / Project Name
     ref_id: Mapped[str | None] = mapped_column(String(100), unique=True, nullable=True, index=True)
     project_name: Mapped[str] = mapped_column(String(300), nullable=False)
+    activity_name: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    category_costcode: Mapped[str | None] = mapped_column(String(300), nullable=True)
 
     # Field 3: Commodity (stored as JSON list)
     commodity: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
