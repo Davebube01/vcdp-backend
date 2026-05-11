@@ -126,17 +126,17 @@ async def create_record(
     if current_user.role != UserRole.NATIONAL_ADMIN and data.state != current_user.state:
         raise HTTPException(status_code=403, detail="Cannot create records for another state")
 
-    # Duplicate Detection for records without Ref ID
-    if not data.ref_id:
-        duplicate_query = select(Transaction).where(
-            Transaction.project_name == data.project_name,
-            Transaction.state == data.state,
-            Transaction.fy_awarded == data.fy_awarded,
-            Transaction.expenditure_total_reported == data.expenditure_total_reported
+    # Duplicate Detection: same project name in the same state
+    duplicate_query = select(Transaction).where(
+        Transaction.project_name == data.project_name,
+        Transaction.state == data.state,
+    )
+    existing = await db.execute(duplicate_query)
+    if existing.scalar_one_or_none():
+        raise HTTPException(
+            status_code=400,
+            detail=f"A record with the project name '{data.project_name}' already exists for {data.state}. Please use a unique name or update the existing record."
         )
-        existing = await db.execute(duplicate_query)
-        if existing.scalar_one_or_none():
-            raise HTTPException(status_code=400, detail="A similar record (same name, state, year, and amount) already exists.")
 
     # Auto-derive phase
     phase = data.programme_phase or _derive_phase(data.fy_awarded)
@@ -203,6 +203,19 @@ async def update_record(
 
     for field, value in data.model_dump(exclude_unset=True).items():
         setattr(record, field, value)
+
+    # Duplicate Detection: check if the new name exists in the same state (excluding this record)
+    duplicate_query = select(Transaction).where(
+        Transaction.project_name == record.project_name,
+        Transaction.state == record.state,
+        Transaction.id != record.id
+    )
+    existing = await db.execute(duplicate_query)
+    if existing.scalar_one_or_none():
+        raise HTTPException(
+            status_code=400,
+            detail=f"A record with the project name '{record.project_name}' already exists for {record.state}. Please use a unique name."
+        )
 
     if current_user.role != UserRole.NATIONAL_ADMIN:
         record.status = TransactionStatus.PENDING
@@ -836,6 +849,7 @@ async def process_bulk_upload(
 
     uploaded_records = []
     errors = []
+    _seen_in_batch: set = set()  # Track (project_name, state) pairs within this upload batch
     
     for sheet_name in xls.sheet_names:
         if sheet_name not in VALID_STATE_TABS:
@@ -983,6 +997,32 @@ async def process_bulk_upload(
                 if current_user.role != UserRole.NATIONAL_ADMIN:
                     db_record.status = TransactionStatus.PENDING
                     
+                # Duplicate detection: project_name + state must be unique
+                existing_check = await db.execute(
+                    select(Transaction).where(
+                        Transaction.project_name == db_record.project_name,
+                        Transaction.state == db_record.state,
+                    )
+                )
+                if existing_check.scalar_one_or_none():
+                    errors.append({
+                        "sheet": sheet_name,
+                        "row": row_num,
+                        "error": f"Duplicate: A record named '{db_record.project_name}' already exists for {db_record.state}."
+                    })
+                    continue
+
+                # Also check within the current batch being uploaded
+                batch_key = (db_record.project_name.strip().lower(), db_record.state.strip().lower())
+                if batch_key in _seen_in_batch:
+                    errors.append({
+                        "sheet": sheet_name,
+                        "row": row_num,
+                        "error": f"Duplicate within upload: '{db_record.project_name}' appears more than once for {db_record.state}."
+                    })
+                    continue
+                _seen_in_batch.add(batch_key)
+
                 uploaded_records.append(db_record)
                 
             except ValidationError as ve:
