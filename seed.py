@@ -36,7 +36,7 @@ VCDP_STATES = [
     {"name": "Niger", "code": "NI"},
     {"name": "Ogun", "code": "OG"},
     {"name": "Taraba", "code": "TA"},
-    {"name": "FCT", "code": "FCT"},
+    {"name": "FCT (NPMU)", "code": "FCT"},
 ]
 
 # Sample LGAs (approx 6-7 per state to reach ~63)
@@ -50,7 +50,7 @@ STATED_LGAS = {
     "Niger": ["Bida", "Katcha", "Kontagora", "Shiroro", "Wushishi"],
     "Ogun": ["Obafemi Owode", "Ijebu North East", "Ifo", "Yewa North", "Odeda"],
     "Taraba": ["Ardo-Kola", "Gassol", "Jalingo", "Karim Lamido", "Wukari"],
-    "FCT": ["Abaji", "Bwari", "Gwagwalada", "Kuje", "Kwali", "AMAC"],
+    "FCT (NPMU)": ["Abaji", "Bwari", "Gwagwalada", "Kuje", "Kwali", "AMAC"],
 }
 
 async def seed():

@@ -1,12 +1,17 @@
 import math
+from pydantic import BaseModel
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, or_
+from sqlalchemy.orm import selectinload
 from typing import List
 import pandas as pd
 import io
 from datetime import datetime
+from openpyxl.worksheet.datavalidation import DataValidation
+from openpyxl.utils import get_column_letter
+from app.models import State, LGA
 from app.database import get_db
 from app.models import Transaction, UserRole
 from app.models import User
@@ -74,9 +79,15 @@ async def list_records(
 
     # State-based visibility: state users only see their own state
     if current_user.role == UserRole.STATE_COORDINATOR:
-        query = query.where(Transaction.state == current_user.state)
+        if current_user.state in ["FCT", "FCT (NPMU)"]:
+            query = query.where(Transaction.state.in_(["FCT", "FCT (NPMU)"]))
+        else:
+            query = query.where(Transaction.state == current_user.state)
     elif state and state != "all":
-        query = query.where(Transaction.state == state)
+        if state in ["FCT", "FCT (NPMU)"]:
+            query = query.where(Transaction.state.in_(["FCT", "FCT (NPMU)"]))
+        else:
+            query = query.where(Transaction.state == state)
 
     if fy_awarded:
         query = query.where(Transaction.fy_awarded == fy_awarded)
@@ -274,6 +285,9 @@ async def update_record_status(
     return TransactionRead.model_validate(record)
 
 
+class BulkDeleteRequest(BaseModel):
+    record_ids: list[str]
+
 @router.delete("/{record_id}", status_code=204)
 async def delete_record(
     record_id: str,
@@ -288,6 +302,34 @@ async def delete_record(
         raise HTTPException(status_code=403, detail="Access denied")
     await db.delete(record)
     await db.commit()
+
+@router.post("/bulk-delete", status_code=204)
+async def bulk_delete_records(
+    request: BulkDeleteRequest,
+    current_user: User = Depends(require_active_user),
+    db: AsyncSession = Depends(get_db),
+):
+    if current_user.role != UserRole.NATIONAL_ADMIN:
+        raise HTTPException(status_code=403, detail="Only National Admins can perform bulk deletion")
+    
+    from sqlalchemy import delete
+    await db.execute(
+        delete(Transaction).where(Transaction.id.in_(request.record_ids))
+    )
+    await db.commit()
+
+@router.delete("/all/clear", status_code=204)
+async def delete_all_records(
+    current_user: User = Depends(require_active_user),
+    db: AsyncSession = Depends(get_db),
+):
+    if current_user.role != UserRole.NATIONAL_ADMIN:
+        raise HTTPException(status_code=403, detail="Only National Admins can clear all records")
+    
+    from sqlalchemy import delete
+    await db.execute(delete(Transaction))
+    await db.commit()
+
 @router.get("/dashboard/metrics")
 async def get_dashboard_metrics(
     state: str | None = Query(None),
@@ -302,9 +344,15 @@ async def get_dashboard_metrics(
     try:
         query = select(Transaction).where(Transaction.status == "PUBLISHED")
         if current_user.role == UserRole.STATE_COORDINATOR:
-            query = query.where(Transaction.state == current_user.state)
+            if current_user.state in ["FCT", "FCT (NPMU)"]:
+                query = query.where(Transaction.state.in_(["FCT", "FCT (NPMU)"]))
+            else:
+                query = query.where(Transaction.state == current_user.state)
         elif state and state != "all":
-            query = query.where(Transaction.state == state)
+            if state in ["FCT", "FCT (NPMU)"]:
+                query = query.where(Transaction.state.in_(["FCT", "FCT (NPMU)"]))
+            else:
+                query = query.where(Transaction.state == state)
         
         if fy_awarded:
             query = query.where(Transaction.fy_awarded == fy_awarded)
@@ -334,14 +382,32 @@ async def get_dashboard_metrics(
         
         # 3FS Pie Data
         from app.routers.meta import THREEFS_COMPONENTS
+        # Normalise shorthand/legacy labels → canonical THREEFS_COMPONENTS keys
+        THREEFS_NORMALISE = {
+            "1. food production":      "Component 1: Agricultural Development and Value Chains",
+            "1. food production":      "Component 1: Agricultural Development and Value Chains",
+            "2. food processing":      "Component 2: Infrastructure for Food Systems",
+            "3. food social protection": "Component 3: Nutrition and Health",
+            "4. enabling environment": "Component 4: Social Assistance",
+            "5. governance":           "Component 5: Climate Change and Natural Resources",
+            # also handle without leading number prefix
+            "food production":         "Component 1: Agricultural Development and Value Chains",
+            "food processing":         "Component 2: Infrastructure for Food Systems",
+            "food social protection":  "Component 3: Nutrition and Health",
+            "enabling environment":    "Component 4: Social Assistance",
+            "governance":              "Component 5: Climate Change and Natural Resources",
+        }
         threefs_data = {key: 0 for key in THREEFS_COMPONENTS.keys()}
         for t in transactions:
             if t.threeFS_primary:
                 for primary in t.threeFS_primary:
-                    if primary in threefs_data:
+                    # Try normalising via lowercase lookup first
+                    canonical = THREEFS_NORMALISE.get(primary.strip().lower(), primary.strip())
+                    if canonical in threefs_data:
+                        threefs_data[canonical] += (t.expenditure_total or 0)
+                    elif primary in threefs_data:
                         threefs_data[primary] += (t.expenditure_total or 0)
-                    else:
-                        threefs_data[primary] = (t.expenditure_total or 0)
+                    # else silently drop unknown labels (don't create rogue slices)
         
         # Trend Data (2013-Current Year)
         import datetime
@@ -354,7 +420,30 @@ async def get_dashboard_metrics(
         # State Performance
         state_perf = {}
         for t in transactions:
-            state_perf[t.state] = state_perf.get(t.state, 0) + (t.expenditure_total or 0)
+            s_name = t.state
+            if "NPMU" in s_name:
+                s_name = "FCT"
+            state_perf[s_name] = state_perf.get(s_name, 0) + (t.expenditure_total or 0)
+
+        # Commodity Breakdown
+        from app.routers.meta import COMMODITIES
+        commodity_data = {c: 0 for c in COMMODITIES}
+        for t in transactions:
+            if t.commodity:
+                for c in t.commodity:
+                    if c in commodity_data:
+                        commodity_data[c] += (t.expenditure_total or 0)
+                    else:
+                        # Fallback for slightly different names or casing
+                        matched = False
+                        for base_c in COMMODITIES:
+                            if base_c.lower() in c.lower():
+                                commodity_data[base_c] += (t.expenditure_total or 0)
+                                matched = True
+                                break
+                        if not matched:
+                            # Group everything else into Cross-cutting or Others if needed
+                            commodity_data["Cross-cutting"] += (t.expenditure_total or 0)
 
         # Funding Source Breakdown
         funding_sources = {
@@ -378,7 +467,8 @@ async def get_dashboard_metrics(
                 "threefs": [{"name": k, "value": v} for k, v in threefs_data.items()],
                 "trend": [{"year": k, "expenditure": v} for k, v in sorted(trend_data.items())],
                 "state_performance": [{"name": k, "value": v} for k, v in sorted(state_perf.items(), key=lambda x: x[1], reverse=True)],
-                "funding_sources": [{"name": k, "value": v} for k, v in funding_sources.items()]
+                "funding_sources": [{"name": k, "value": v} for k, v in funding_sources.items()],
+                "commodities": [{"name": k, "value": v} for k, v in commodity_data.items()]
             }
         }
     except Exception as e:
@@ -400,9 +490,15 @@ async def export_excel(
 ):
     query = select(Transaction).where(Transaction.status == "PUBLISHED")
     if current_user.role == UserRole.STATE_COORDINATOR:
-        query = query.where(Transaction.state == current_user.state)
+        if current_user.state in ["FCT", "FCT (NPMU)"]:
+            query = query.where(Transaction.state.in_(["FCT", "FCT (NPMU)"]))
+        else:
+            query = query.where(Transaction.state == current_user.state)
     elif state and state != "all":
-        query = query.where(Transaction.state == state)
+        if state in ["FCT", "FCT (NPMU)"]:
+            query = query.where(Transaction.state.in_(["FCT", "FCT (NPMU)"]))
+        else:
+            query = query.where(Transaction.state == state)
     if fy_awarded:
         query = query.where(Transaction.fy_awarded == fy_awarded)
     if vcdp_component:
@@ -692,7 +788,7 @@ async def export_csv(
 
 VALID_STATE_TABS = [
     'Anambra', 'Benue', 'Ebonyi', 'Enugu', 'Kogi', 
-    'Nasarawa', 'Niger', 'Ogun', 'Taraba'
+    'Nasarawa', 'Niger', 'Ogun', 'Taraba', 'FCT'
 ]
 
 # The mapping from frontend schema to Excel column names
@@ -755,48 +851,154 @@ TEMPLATE_COLUMNS = [
 async def download_bulk_upload_template(
     token: str | None = Query(None),
     current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ):
     output = io.BytesIO()
     
-    # Create empty dataframe with our master columns
+    # 1. Fetch metadata for dropdowns
+    from app.routers.meta import (
+        VCDP_COMPONENTS, THREEFS_COMPONENTS, FUNDING_SOURCES, 
+        VALUE_CHAIN_SEGMENTS, COMMODITIES, FISCAL_YEARS
+    )
+    
+    # Get all states and their LGAs from DB
+    result = await db.execute(select(State).options(selectinload(State.lgas)))
+    db_states = result.scalars().all()
+    state_lga_map = {s.name: [l.name for l in s.lgas] for s in db_states}
+    # Special mapping for NPMU -> FCT (NPMU)
+    if "FCT (NPMU)" in state_lga_map:
+        state_lga_map["NPMU"] = state_lga_map["FCT (NPMU)"]
+
+    # 2. Create the workbook
     df = pd.DataFrame(columns=TEMPLATE_COLUMNS)
     
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        # Create a hidden sheet for options
+        workbook = writer.book
+        options_ws = workbook.create_sheet("Options")
+        options_ws.sheet_state = 'hidden'
+        
+        # Populate options sheet
+        options_map = {
+            "RecordType": ["Actual", "Budget"],
+            "Status": ["DRAFT", "PENDING", "PUBLISHED", "REJECTED"],
+            "Currency": ["NGN", "USD"],
+            "Climate": ["Yes", "No"],
+            "Commodity": COMMODITIES,
+            "Quarters": ["Q1", "Q2", "Q3", "Q4", "Q1, Q2, Q3, Q4"],
+            "VCDP_Comp": list(VCDP_COMPONENTS.keys()),
+            "3FS_Comp": list(THREEFS_COMPONENTS.keys()),
+            "Years": [str(y) for y in FISCAL_YEARS],
+            "Units": ["Person", "Hectares", "Kilometers", "Tons", "Number", "Other"],
+            "Phases": ["Original (2013-2018)", "1st AF", "2nd AF"],
+            "Funding": list(FUNDING_SOURCES.keys()),
+            "Segments": VALUE_CHAIN_SEGMENTS
+        }
+        
+        # Write options to columns in the hidden sheet
+        col_idx = 1
+        ref_map = {}
+        for key, vals in options_map.items():
+            for row_idx, val in enumerate(vals, 1):
+                options_ws.cell(row=row_idx, column=col_idx, value=val)
+            # Use quoted sheet name for formulas with special characters/spaces
+            ref_map[key] = f"'Options'!${get_column_letter(col_idx)}$1:${get_column_letter(col_idx)}${len(vals)}"
+            col_idx += 1
+            
+        # Write LGAs to subsequent columns
+        lga_ref_map = {}
+        for state_name, lgas in state_lga_map.items():
+            if not lgas: continue
+            for row_idx, lga in enumerate(lgas, 1):
+                options_ws.cell(row=row_idx, column=col_idx, value=lga)
+            lga_ref_map[state_name] = f"'Options'!${get_column_letter(col_idx)}$1:${get_column_letter(col_idx)}${len(lgas)}"
+            col_idx += 1
+
+        # 3. Create state sheets and apply validations
+        print(f"Generating template for user: {current_user.email}")
         for state in VALID_STATE_TABS:
-            # If state coordinator, maybe only generate their state?
             if current_user.role == UserRole.STATE_COORDINATOR and current_user.state != state:
                 continue
+                
             df.to_excel(writer, index=False, sheet_name=state)
-            
-            # Auto-adjust column widths for better UX
             worksheet = writer.sheets[state]
+            
+            # Helper to add validation
+            def add_val(col_name, formula):
+                try:
+                    idx = TEMPLATE_COLUMNS.index(col_name) + 1
+                    col_letter = get_column_letter(idx)
+                    # Create validation object
+                    dv = DataValidation(
+                        type="list", 
+                        formula1=formula, 
+                        allow_blank=True,
+                        showErrorMessage=True,
+                        errorTitle="Invalid Selection",
+                        error="Please select a value from the list."
+                    )
+                    # Apply to a large range of rows
+                    dv.add(f"{col_letter}2:{col_letter}2000")
+                    worksheet.add_data_validation(dv)
+                except ValueError: 
+                    print(f"  Warning: Column '{col_name}' not found in template.")
+                except Exception as e:
+                    print(f"  Error adding validation for '{col_name}': {e}")
+
+            # Apply validations
+            add_val("Record Type", ref_map["RecordType"])
+            add_val("Status", ref_map["Status"])
+            add_val("Currency", ref_map["Currency"])
+            add_val("Climate Aligned?", ref_map["Climate"])
+            add_val("Commodity", ref_map["Commodity"])
+            add_val("Fiscal Quarter", ref_map["Quarters"])
+            add_val("VCDP Component", ref_map["VCDP_Comp"])
+            add_val("3FS Primary Component", ref_map["3FS_Comp"])
+            add_val("FY Awarded", ref_map["Years"])
+            add_val("FY Completed", ref_map["Years"])
+            add_val("Beneficiary Unit", ref_map["Units"])
+            add_val("Programme Phase", ref_map["Phases"])
+            add_val("Funding Sources", ref_map["Funding"])
+            add_val("Value Chain Segment(s)", ref_map["Segments"])
+            
+            # LGA validation (state specific)
+            if state in lga_ref_map:
+                add_val("LGA(s)", lga_ref_map[state])
+
+            # Auto-adjust column widths
             for col in worksheet.columns:
                 max_length = 0
                 column = col[0].column_letter
                 for cell in col:
                     try:
-                        if len(str(cell.value)) > max_length:
-                            max_length = len(cell.value)
-                    except:
-                        pass
-                adjusted_width = (max_length + 2)
-                worksheet.column_dimensions[column].width = adjusted_width
+                        if cell.value and len(str(cell.value)) > max_length:
+                            max_length = len(str(cell.value))
+                    except: pass
+                worksheet.column_dimensions[column].width = max(max_length + 2, 12)
 
     output.seek(0)
-    
     filename = f"VCDP_Bulk_Upload_Template_{datetime.now().strftime('%Y%m%d')}.xlsx"
-    headers = {
-        'Content-Disposition': f'attachment; filename="{filename}"'
-    }
-    
     return StreamingResponse(
         output,
-        headers=headers,
+        headers={'Content-Disposition': f'attachment; filename="{filename}"'},
         media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
     )
 
 import json
 from pydantic import ValidationError
+
+THREEFS_NORMALISE = {
+    "1. food production":      "Component 1: Agricultural Development and Value Chains",
+    "2. food processing":      "Component 2: Infrastructure for Food Systems",
+    "3. food social protection": "Component 3: Nutrition and Health",
+    "4. enabling environment": "Component 4: Social Assistance",
+    "5. governance":           "Component 5: Climate Change and Natural Resources",
+    "food production":         "Component 1: Agricultural Development and Value Chains",
+    "food processing":         "Component 2: Infrastructure for Food Systems",
+    "food social protection":  "Component 3: Nutrition and Health",
+    "enabling environment":    "Component 4: Social Assistance",
+    "governance":              "Component 5: Climate Change and Natural Resources",
+}
 
 def safe_float(val):
     if pd.isna(val) or val == "":
@@ -852,11 +1054,15 @@ async def process_bulk_upload(
     _seen_in_batch: set = set()  # Track (project_name, state) pairs within this upload batch
     
     for sheet_name in xls.sheet_names:
-        if sheet_name not in VALID_STATE_TABS:
+        if sheet_name not in VALID_STATE_TABS and sheet_name != "NPMU":
             continue
             
-        if current_user.role == UserRole.STATE_COORDINATOR and current_user.state != sheet_name:
-            continue
+        if current_user.role == UserRole.STATE_COORDINATOR:
+            user_state = current_user.state
+            # Normalize for comparison
+            check_sheet = "FCT (NPMU)" if sheet_name in ["NPMU", "FCT"] else sheet_name
+            if user_state != check_sheet:
+                continue
             
         df = pd.read_excel(xls, sheet_name=sheet_name)
         
@@ -908,7 +1114,7 @@ async def process_bulk_upload(
                     "institution_code": safe_str(row.get("Institution Code")),
                     "executing_agency": safe_str(row.get("Executing Agency")),
                     
-                    "state": sheet_name,
+                    "state": "FCT (NPMU)" if sheet_name in ["NPMU", "FCT"] else sheet_name,
                     "lgas": safe_list(row.get("LGA(s)")),
                     
                     "fy_awarded": safe_int(row.get("FY Awarded")),
@@ -919,8 +1125,9 @@ async def process_bulk_upload(
                     "commodity": safe_list(row.get("Commodity")),
                     "vcdp_component": safe_list(row.get("VCDP Component")),
                     "vcdp_sub_components": safe_list(row.get("VCDP Sub-Component(s)")),
-                    "threeFS_primary": safe_list(row.get("3FS Primary Component")),
+                    "threeFS_primary": [THREEFS_NORMALISE.get(p.strip().lower(), p.strip()) for p in safe_list(row.get("3FS Primary Component"))],
                     "threeFS_sub_components": safe_list(row.get("3FS Sub-Component(s)")),
+                    "climate_flag": "Yes" if any("Component 5" in (THREEFS_NORMALISE.get(p.strip().lower(), p.strip())) for p in safe_list(row.get("3FS Primary Component"))) else (safe_str(row.get("Climate Flag")) or "No"),
                     
                     "cofog_code": safe_str(row.get("COFOG Code")),
                     "cofog_divisions": safe_list(row.get("COFOG Division(s)")),
@@ -964,8 +1171,11 @@ async def process_bulk_upload(
                 
                 # Check for absolute requirements before Pydantic parsing
                 if not record_data.get("lgas"):
-                    errors.append({"sheet": sheet_name, "row": row_num, "error": "LGA(s) is required"})
-                    continue
+                    if sheet_name in ["NPMU", "FCT"]:
+                        record_data["lgas"] = ["All LGAs"]
+                    else:
+                        errors.append({"sheet": sheet_name, "row": row_num, "error": "LGA(s) is required"})
+                        continue
                 if not record_data.get("threeFS_primary"):
                     errors.append({"sheet": sheet_name, "row": row_num, "error": "3FS Primary Component is required"})
                     continue

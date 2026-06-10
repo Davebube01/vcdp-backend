@@ -14,7 +14,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="VCDP FormCraft API",
+    title="VCDP API",
     description=(
         "Backend API for the VCDP Transaction Tracking & 3FS Reporting System. "
         "Tracks VCDP expenditures 2013-2050, links to UN/IFAD 3FS framework."
